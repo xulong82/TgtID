@@ -1,0 +1,397 @@
+---
+title: "Evaluate the Arsenal of TI methods: CRISPR, OMICS, and compound screening"
+output: html_notebook
+---
+
+```{r}
+library(ape)
+library(amap)
+library(xlsx)
+library(ggplot2)
+library(ggrepel)
+library(dplyr)
+library(data.table)
+options(stringsAsFactors = F)
+```
+
+## Objective: 
+
+To quantify sensitivity and specificity of three target identification methods: CRISPR, OMICS, and compound screening.
+
+## Compound screening
+
+> With a well accepted functional readout, it is the most efficient to search for new targets by using compounds libraries. However, existing compounds only cover roughly 5% of protein-coding genes, around 1,000 genes.   
+
+> It is possible to exatropolate individual target genes to pathways by using pathway databases such as the KEGG and STRING, with the understanding that existing pathway databases often lack cell and context specificity.
+
+> There might be a way to prune the pathway databases (KEGG and STRING) to the more conservative components in the context of lung carcinoma, making the extrapolation results more useful.
+
+## The LKB1 project run a cell survival assay on 21 lung cancer cell lines using a small library of 54 compounds. The 54 compounds targets 42 genes.
+
+> Brian Anderson selected the 54 compounds, that covers LKB1 pathway inhibitors, adjacent pathway inhibitors, standards of care, GDSC and Achilles genetic targets.
+
+```{r}
+ctg = read.xlsx("~/Desktop/myproject/2018-10-12_Copy of LKB1 tool set CTG.xlsx", sheetName = "Sheet1")
+ctg$target = gsub("ACC1/2", "ACC 1/2", ctg$target)
+paste("Number of cell lines:", length(unique(ctg$Cells)))
+paste("Number of unique targets:", length(unique(ctg$target)))
+paste("Number of unique compounds:", length(unique(ctg$Sample)))
+```
+
+```{r}
+uid = paste(ctg$target, ctg$Sample, sep = ":")
+ctg2 = ctg[! duplicated(uid), ]
+ctg2 = ctg2[order(ctg2$target), ]
+mytable = ctg2[, c("Sample", "target")] %>% as.data.frame
+mytable %>% data.table
+```
+
+## The compound screening experiment run two replicates for each compound/cell combo. 
+## What about consistency bt the two replicates?
+
+```{r}
+ctg$dispense = round(ctg$EC50.ratio..Run1.Run2..wet.dispense, 2)
+ctg$dispense[ctg$dispense > 0.1 & ctg$dispense < 10] = NA
+table(is.na(ctg$dispense))
+
+ggplot(ctg, aes(x = EC50_replicate_1.wet.dispense, y = EC50_replicate_2.wet.dispense)) + 
+  geom_point(aes(color = is.na(dispense))) + geom_text_repel(aes(label = dispense))
+```
+
+## The two replicates generally correlate well. 
+## But, there are multiple outliers, which we exclude from downstream analysis. 
+
+```{r}
+ctg1 = ctg[! is.na(ctg$dispense), ]
+paste("Cells:", unique(ctg1$Cells))
+paste("Compounds:", unique(ctg1$Sample))
+ctg = ctg[is.na(ctg$dispense), ]
+```
+
+> 23 compound/cell combo showed poor consistency between replicates: 10 times or greater in EC50 ratio.
+> The 23 compound/cell combo spread to 18 compounds on 7 cells, no pattern in terms which compounds or cells were more prone to generate the inconsistent results 
+
+> Take the average of the two EC50 values per compound/cell combo 
+
+```{r}
+ctg$ec50 = rowMeans(ctg[, grepl("EC50_replicate", names(ctg))])
+```
+
+## How the data looks like?
+
+```{r}
+hist(ctg$ec50)
+summary(ctg$ec50)
+```
+
+## There are two clear peaks on the lower and upper end of the distribution graph. 
+
+## Let's break down the 54 compounds into 3 groups: (1) no effects in all cells; (2) strong effects in all cells; (3) variable effects across the cells
+
+```{r}
+cmpd = unique(ctg$Sample); cell = unique(ctg$Cells)
+
+cmpd.qt = sapply(cmpd, function(x) {
+  tmp = ctg[ctg$Sample == x, ]
+  quantile(tmp$ec50, seq(0.1, 1, 0.1))
+}) %>% t %>% as.data.frame
+
+cs1 = apply(cmpd.qt, 1, function(x) min(x) >= 1e4)
+cs1 = cmpd.qt[cs1, ]
+dim(cs1)
+
+cs2 = apply(cmpd.qt, 1, function(x) max(x) <= 1e2)
+cs2 = cmpd.qt[cs2, ]
+dim(cs2)
+
+cs3 = apply(cmpd.qt, 1, function(x) min(x) < 1e4 & max(x) > 1e2)
+cs3 = cmpd.qt[cs3, ]
+dim(cs3)
+
+mytable$Effect = "variable effects"
+mytable$Effect[mytable$Sample %in% rownames(cs1)] = "no effects in all"
+mytable$Effect[mytable$Sample %in% rownames(cs2)] = "strong effects in all"
+
+unique(mytable$target)
+# xlsx::write.xlsx(mytable, file = "myeval.xlsx", sheetName = "Table 1", append = T)
+```
+
+## What the EC50 data looks like for compounds that showed no effects in all cells?
+
+```{r}
+for (cmpd1 in rownames(cs1)) {
+  ctg1 = ctg[ctg$Sample == cmpd1, ]
+  ctg1 = ctg1[order(ctg1$ec50), ]
+  ctg1$Cells = factor(ctg1$Cells, levels = ctg1$Cells)
+  
+  target = unique(ctg1$target)
+  mytitle = paste0("Compuond: ", cmpd1, "\n", "Target: ", target)
+  p = ggplot(ctg1, aes(x = Cells , y = ec50, fill = Genotype)) + geom_bar(stat = "identity") +
+    coord_flip() + xlab("") + ylab("EC50") + ggtitle(mytitle) + ylim(c(0, 1e4))
+  print(p)
+}
+```
+
+## Mapping compounds to target genes
+
+```{r}
+mytable2 = xlsx::read.xlsx("myeval.xlsx", sheetName = "Table 1")
+mytable3 = mytable2[mytable2$Compound_effect == "no effects in all", ]
+mygene1 = sapply(mytable3$Target_gene, function(x) unlist(strsplit(x, split = ", ")))
+mygene1 = mygene1[-c(3:5)]
+mygene2 = unique(unlist(mygene1)) 
+```
+
+> To compare w CRISPR results, we removed activating compounds: AMPK activators
+> After mapping compounds to target genes, there are plenty of 1 to N and N to 1 mapping from compound to target genes. 
+> The 12 no-effects compounds map to 12 unique genes, which forms the no-effects gene list. 
+> Among the 12 target genes, there are other compounds that target HDAC4 and PIK3CD and showed some effects. 
+> We removed these two genes from the no-effects gene list.
+
+## The 10 genes, upon compound perturbations, showed no effects on cell survival for all the 21 cell lines.
+
+```{r}
+(mygene3 = setdiff(mygene2, c("HDAC4", "PIK3CD")))
+```
+
+## Now, let's look at the CRISPR data on these 10 genes
+
+## 12 out of the 21 compound screening cell lines had CRISPR data in Achilles
+
+```{r}
+achi.all = fread("~/Desktop/myproject/sample_info.csv")
+achi.lung = achi.all[achi.all$primary_tissue == "lung", ]
+achi.lung$CCLE_name = gsub("_LUNG", "", achi.lung$CCLE_name)
+
+ctg$Cells = gsub("1437", "NCIH1437", ctg$Cells)
+ctg$Cells = gsub("1703", "NCIH1703", ctg$Cells)
+ctg$Cells = gsub("1944", "NCIH1944", ctg$Cells)
+ctg$Cells = gsub("H23", "NCIH23", ctg$Cells)
+ctg$Cells = gsub("2023", "NCIH2023", ctg$Cells)
+ctg$Cells = gsub("2122", "NCIH2122", ctg$Cells)
+ctg$Cells = gsub("2030", "NCIH2030", ctg$Cells)
+ctg$Cells = gsub("2172", "NCIH2172", ctg$Cells)
+
+z1 = unique(ctg$Cells) %>% sort
+z2 = achi.lung$CCLE_name %>% sort
+
+setdiff(z1, z2)
+intersect(z1, z2)
+
+grep("1755", achi.all$CCLE_name)
+grep("1975", achi.all$CCLE_name)
+grep("2009", achi.all$CCLE_name)
+grep("358", achi.all$CCLE_name)
+achi.all$CCLE_name[grep("647", achi.all$CCLE_name)]
+achi.all$CCLE_name[grep("RERF", achi.all$CCLE_name)]
+achi.all$CCLE_name[grep("SKLU", achi.all$CCLE_name)]
+achi.all$CCLE_name[grep("UBC", achi.all$CCLE_name)]
+
+achi.lung = achi.lung[achi.lung$CCLE_name %in% z1, ]
+```
+
+## CRISPR data
+
+```{r}
+# achille1 = fread("~/Git/MRK_P1/gene_dependency_corrected.csv") %>% as.data.frame
+# save(achille1, file = "~/Git/MRK_P1/achille1.rdt")
+load(file = "~/Git/MRK_P1/achille1.rdt")
+achille2 = achille1[achille1$line %in% achi.lung$Broad_ID, ] 
+
+names(achille2) = gsub(" .*", "", names(achille2))
+rownames(achille2) = achille2$line
+achille2$line = NULL
+achille2 = t(achille2) %>% as.data.frame
+names(achille2) = achi.lung$CCLE_name[match(names(achille2), achi.lung$Broad_ID)]
+```
+
+## 10 out of the 10 genes had Achilles results
+
+```{r}
+intersect(mygene3, rownames(achille2)) 
+```
+
+## Do they agree?
+
+```{r}
+y = achille2[mygene3, ]
+
+hc1 = hcluster(y, method = "pearson", link = "average")
+hc2 = hcluster(t(y), method = "pearson", link = "average")
+
+y = y[hc1$order, hc2$order]
+gdt <- melt(as.matrix(y))
+
+gdt$gene <- factor(gdt$Var1, levels = rownames(y))
+gdt$cell <- factor(gdt$Var2, levels = colnames(y))
+
+ggplot(gdt, aes(x = gene, y = cell, fill = value)) + 
+  geom_tile() + guides(alpha = F) + 
+  scale_fill_gradient2(low = "blue", high = "red") +
+  theme_bw() + xlab("") + ylab("") +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1))
+```
+
+## Test: what is the odds ratio of the 18 genes to have dependency probability smaller than 0.5
+
+```{r}
+y1 = achille2
+y2 = achille2[mygene3, ]
+
+table(y1 > 0.5) / nrow(y1) / ncol(y1)
+table(y2 > 0.5) / nrow(y2) / ncol(y2)
+
+y1m = melt(as.matrix(y1))
+y2m = melt(as.matrix(y2))
+
+y1m$ID = paste(y1m$Var1, y1m$Var2, sep = "_")
+y2m$ID = paste(y2m$Var1, y2m$Var2, sep = "_")
+
+y3 = data.frame(ID = y1m$ID, pp = y1m$value)
+y3$bpp = as.numeric(y3$pp < 0.5)
+y3$cs = as.numeric(y3$ID %in% y2m$ID)
+
+glm(data = y3, bpp ~ cs, family = "binomial") %>% summary
+y4 = with(y3, table(bpp, cs))
+chisq.test(y4)$p.value
+```
+
+## Being an non-effective genes in the compound screening results showed slightly higher degree of dependencies in the Achilles results
+## While there could be selection bias, this is still a suprise!
+
+## What the OMICS data looks like for these genes?
+
+```{r}
+load("~/Desktop/myproject/total_protein.rdt") 
+hist(expr2)
+
+expr3 = expr2[gsub("_.*", "", rownames(expr2)) %in% mygene3, ]
+quantile(expr2, c(0.1, 0.3, 0.5))
+quantile(expr3, c(0.1, 0.3, 0.5))
+```
+
+## Expression levels of the non-effecting target genes were normal than all the others, at least not significant lower
+## Better use the expression data before imputation, but likely would not change the big picture
+
+## What the EC50 data looks like for compounds that showed strong effects in all cells?
+
+```{r}
+for ( cmpd1 in rownames(cs2)) {
+  ctg1 = ctg[ctg$Sample == cmpd1, ]
+  ctg1 = ctg1[order(ctg1$ec50), ]
+  ctg1$Cells = factor(ctg1$Cells, levels = ctg1$Cells)
+  
+  target = unique(ctg1$target)
+  mytitle = paste0("Compuond: ", cmpd1, "\n", "Target: ", target)
+  p = ggplot(ctg1, aes(x = Cells , y = ec50, fill = Genotype)) + geom_bar(stat = "identity") +
+    coord_flip() + xlab("") + ylab("EC50") + ggtitle(mytitle) + ylim(c(0, 1e2))
+  print(p)
+}
+```
+
+## These compounds all target pathways. Target genes are not clear. 
+
+## What the EC50 data looks like for compounds that showed variable effects across the cells?
+
+```{r}
+for ( cmpd1 in rownames(cs3)) {
+  ctg1 = ctg[ctg$Sample == cmpd1, ]
+  ctg1 = ctg1[order(ctg1$ec50), ]
+  ctg1$Cells = factor(ctg1$Cells, levels = ctg1$Cells)
+  
+  wilcox = wilcox.test(ec50 ~ Genotype, data = ctg1)
+  pval = format(wilcox$p.value, digits = 3)
+  target = unique(ctg1$target)
+  mytitle = paste0("Compuond: ", cmpd1, "\n", "Target: ", target, "\n", "P-value: ", pval)
+  p = ggplot(ctg1, aes(x = Cells , y = ec50, fill = Genotype)) + geom_bar(stat = "identity") +
+    coord_flip() + xlab("") + ylab("EC50") + ggtitle(mytitle) # + ylim(c(0, 1e2))
+  print(p)
+}
+```
+
+## Mapping compounds to target genes
+
+```{r}
+mytable2 = xlsx::read.xlsx("myeval.xlsx", sheetName = "Table 1")
+mytable4 = mytable2[mytable2$Compound_effect == "variable effects", ]
+mytable4 = mytable4[! is.na(mytable4$Target_gene), ]
+mygene4 = sapply(mytable4$Target_gene, function(x) unlist(strsplit(x, split = ", ")))
+mygene5 = unique(unlist(mygene4)) 
+```
+
+## Resolved 15 target genes for the 34 compounds that showed variable effects across the cells
+
+```{r}
+intersect(mygene5, rownames(achille2)) 
+```
+
+## Among these 15 genes, what about the concordance between the compound screening and Achilles results?
+
+```{r}
+names(mygene4) = mytable4$Compound
+zzz = do.call(rbind, mygene4) %>% melt
+mytable5 = zzz[! duplicated(paste(zzz$Var1, zzz$value, sep = "_")), ]
+mytable5$Var2 = NULL
+names(mytable5) = c("Compound", "Target_gene")
+mytable5$Target = mytable4$Target[match(mytable5$Compound, mytable4$Compound)]
+
+mytable5 = mytable5[mytable5$Target_gene %in% rownames(achille2), ]
+
+x = ctg[ctg$Sample %in% mytable5$Compound, ] 
+x = x[x$Cells %in% colnames(achille2), ] # cpd screening results
+y = achille2[unique(mytable5$Target_gene), ] # achilles results
+
+cor_all = lapply( 1:nrow(mytable5), function(i) {
+  x1 = x[x$Sample == mytable5$Compound[i], ]
+  y1 = y[mytable5$Target_gene[i], x1$Cells]
+  
+  x1$PP = 1 - c(as.matrix(y1)) # high dependency probability maps to low EC50
+  cor = cor.test(x1$ec50, x1$PP)
+  pho = format(cor$estimate, digits = 3)
+  pval = format(cor$p.value, digits = 3)
+  data.frame(Cor = pho, Pval = pval)
+})
+
+mytable5 = cbind(mytable5, do.call(rbind, cor_all))
+data.table(mytable5)
+```
+
+## The correlations were very poor. Let's graph the data.
+
+```{r}
+for ( i in 1:nrow(mytable5)) {
+  cmpd1 = mytable5$Compound[i]
+  target = mytable5$Target_gene[i]
+  x1 = x[x$Sample == cmpd1, ]
+  y1 = y[target, x1$Cells]
+  
+  x1$PP = 1 - c(as.matrix(y1)) # high dependency probability maps to low EC50
+  cor = cor.test(x1$ec50, x1$PP)
+  pho2 = format(cor$estimate, digits = 3)
+  pval = format(cor$p.value, digits = 3)
+  
+  cor = cor.test(x1$ec50, x1$PP)
+  cor = format(cor$estimate, digits = 3)
+  mytitle = paste0("Compuond: ", cmpd1, "\n", "Target: ", target, "\n", "Cor: ", pho2, "\n", "P-value: ", pval)
+  p = ggplot(x1, aes(x = ec50, y = PP)) + geom_point() +
+    xlab("Screening EC50") + ylab("1 - Achilles Dependency Probability") + ggtitle(mytitle)
+  print(p)
+}
+```
+
+## Starting from the compound screening results, ask what the CRISPR data looks like
+
+## Two ways to compare the CRISPR and compound screening results
+
+1. Single gene
+> take genes w variability, run correlation between the CS EC50 and the CRISPR dependency probability
+> take genes that showed LKB1 synthetic dependency, test the contingency table (need to choose a cutoff)
+
+2. Across many genes
+> Absolute EC50 values are not comparable among different compounds, a normalization is needed
+> probably now a practical analysis   
+
+## Starting from the CRISPR data, ask what the compound screening data looks like?
+
+## CRISPR experiment by Achilles only depleted genes. 
+## It estimated, for active/expressed genes in a given cell line, the survival dependency to a given gene for a given cell (dependency probability).
