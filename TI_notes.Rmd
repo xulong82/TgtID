@@ -16,22 +16,20 @@ options(stringsAsFactors = F)
 
 ## Objective: 
 
-To quantify sensitivity and specificity of three target identification methods: CRISPR, OMICS, and compound screening.
+> To evaluate 3 target identification methods: CRISPR, compound screening, OMIC expression profiling.
 
 ## Compound screening
 
-> With a well accepted functional readout, it is the most efficient to search for new targets by using compounds libraries. However, existing compounds only cover roughly 5% of protein-coding genes, around 1,000 genes.   
+> With a well suited functional readout, this is the most efficient target ID method because of its pharmacological nature. However, existing compound libaries are neither complete nor well annotated. This represents a big limitation of this method.
 
-> It is possible to exatropolate individual target genes to pathways by using pathway databases such as the KEGG and STRING, with the understanding that existing pathway databases often lack cell and context specificity.
+> It is possible to exatropolate individual target genes to pathways by using pathway databases such as the KEGG and STRING, understanding that the pathway databases are generally deprived of cell and context specificity. There might be a way to prune the pathway databases (KEGG and STRING) to the more conservative components.
 
-> There might be a way to prune the pathway databases (KEGG and STRING) to the more conservative components in the context of lung carcinoma, making the extrapolation results more useful.
+## The LKB1 project run a cell survival assay on 21 lung cancer cell lines using a small library of 54 compounds that are annotated to 42 target genes.
 
-## The LKB1 project run a cell survival assay on 21 lung cancer cell lines using a small library of 54 compounds. The 54 compounds targets 42 genes.
-
-> Brian Anderson selected the 54 compounds, that covers LKB1 pathway inhibitors, adjacent pathway inhibitors, standards of care, GDSC and Achilles genetic targets.
+> Brian Anderson selected the 54 compounds, which covers the LKB1 pathway inhibitors, adjacent pathway inhibitors, standards of cares, GDSC and Achilles genetic targets.
 
 ```{r}
-ctg = read.xlsx("~/Desktop/myproject/2018-10-12_Copy of LKB1 tool set CTG.xlsx", sheetName = "Sheet1")
+ctg = read.xlsx("2018-10-12_Copy of LKB1 tool set CTG.xlsx", sheetName = "Sheet1")
 ctg$target = gsub("ACC1/2", "ACC 1/2", ctg$target)
 paste("Number of cell lines:", length(unique(ctg$Cells)))
 paste("Number of unique targets:", length(unique(ctg$target)))
@@ -46,7 +44,7 @@ mytable = ctg2[, c("Sample", "target")] %>% as.data.frame
 mytable %>% data.table
 ```
 
-## The compound screening experiment run two replicates for each compound/cell combo. 
+## The compound screening experiment run two replicates for each compound and cell combo. 
 ## What about consistency bt the two replicates?
 
 ```{r}
@@ -58,7 +56,7 @@ ggplot(ctg, aes(x = EC50_replicate_1.wet.dispense, y = EC50_replicate_2.wet.disp
   geom_point(aes(color = is.na(dispense))) + geom_text_repel(aes(label = dispense))
 ```
 
-## The two replicates generally correlate well. 
+## The two replicates generally agreed with each other. 
 ## But, there are multiple outliers, which we exclude from downstream analysis. 
 
 ```{r}
@@ -68,23 +66,18 @@ paste("Compounds:", unique(ctg1$Sample))
 ctg = ctg[is.na(ctg$dispense), ]
 ```
 
-> 23 compound/cell combo showed poor consistency between replicates: 10 times or greater in EC50 ratio.
+> 23 compound and cell combo showed poor consistency between the replicates: 10 times or greater in EC50 ratio.
 > The 23 compound/cell combo spread to 18 compounds on 7 cells, no pattern in terms which compounds or cells were more prone to generate the inconsistent results 
 
-> Take the average of the two EC50 values per compound/cell combo 
+## Take the average of the two EC50 values per compound and cell combo for the downstream analysis
 
 ```{r}
 ctg$ec50 = rowMeans(ctg[, grepl("EC50_replicate", names(ctg))])
-```
-
-## How the data looks like?
-
-```{r}
 hist(ctg$ec50)
 summary(ctg$ec50)
 ```
 
-## There are two clear peaks on the lower and upper end of the distribution graph. 
+## There are two clear peaks on the lower and upper end of the distribution graph. These represent either highly effective or highly inert compound and cell combo.
 
 ## Let's break down the 54 compounds into 3 groups: (1) no effects in all cells; (2) strong effects in all cells; (3) variable effects across the cells
 
@@ -113,7 +106,7 @@ mytable$Effect[mytable$Sample %in% rownames(cs1)] = "no effects in all"
 mytable$Effect[mytable$Sample %in% rownames(cs2)] = "strong effects in all"
 
 unique(mytable$target)
-# xlsx::write.xlsx(mytable, file = "myeval.xlsx", sheetName = "Table 1", append = T)
+# xlsx::write.xlsx(mytable, file = "myTgtID.xlsx", sheetName = "Table 1", append = T)
 ```
 
 ## What the EC50 data looks like for compounds that showed no effects in all cells?
@@ -135,7 +128,7 @@ for (cmpd1 in rownames(cs1)) {
 ## Mapping compounds to target genes
 
 ```{r}
-mytable2 = xlsx::read.xlsx("myeval.xlsx", sheetName = "Table 1")
+mytable2 = xlsx::read.xlsx("myTgtID.xlsx", sheetName = "Table 1")
 mytable3 = mytable2[mytable2$Compound_effect == "no effects in all", ]
 mygene1 = sapply(mytable3$Target_gene, function(x) unlist(strsplit(x, split = ", ")))
 mygene1 = mygene1[-c(3:5)]
@@ -159,7 +152,7 @@ mygene2 = unique(unlist(mygene1))
 ## 12 out of the 21 compound screening cell lines had CRISPR data in Achilles
 
 ```{r}
-achi.all = fread("~/Desktop/myproject/sample_info.csv")
+achi.all = fread("sample_info.csv")
 achi.lung = achi.all[achi.all$primary_tissue == "lung", ]
 achi.lung$CCLE_name = gsub("_LUNG", "", achi.lung$CCLE_name)
 
@@ -193,9 +186,9 @@ achi.lung = achi.lung[achi.lung$CCLE_name %in% z1, ]
 ## CRISPR data
 
 ```{r}
-# achille1 = fread("~/Git/MRK_P1/gene_dependency_corrected.csv") %>% as.data.frame
-# save(achille1, file = "~/Git/MRK_P1/achille1.rdt")
-load(file = "~/Git/MRK_P1/achille1.rdt")
+# achille1 = fread("./gene_dependency_corrected.csv") %>% as.data.frame
+# save(achille1, file = "achille1.rdt")
+load(file = "achille1.rdt")
 achille2 = achille1[achille1$line %in% achi.lung$Broad_ID, ] 
 
 names(achille2) = gsub(" .*", "", names(achille2))
@@ -211,7 +204,7 @@ names(achille2) = achi.lung$CCLE_name[match(names(achille2), achi.lung$Broad_ID)
 intersect(mygene3, rownames(achille2)) 
 ```
 
-## Do they agree?
+## Do CRISPR and compound screening results agree with each other?
 
 ```{r}
 y = achille2[mygene3, ]
@@ -256,8 +249,7 @@ y4 = with(y3, table(bpp, cs))
 chisq.test(y4)$p.value
 ```
 
-## Being an non-effective genes in the compound screening results showed slightly higher degree of dependencies in the Achilles results
-## While there could be selection bias, this is still a suprise!
+## Surprise: being an non-effective genes in the compound screening results showed slightly higher degree of dependencies in the Achilles results
 
 ## What the OMICS data looks like for these genes?
 
@@ -270,8 +262,7 @@ quantile(expr2, c(0.1, 0.3, 0.5))
 quantile(expr3, c(0.1, 0.3, 0.5))
 ```
 
-## Expression levels of the non-effecting target genes were normal than all the others, at least not significant lower
-## Better use the expression data before imputation, but likely would not change the big picture
+## Expression levels of the non-effecting target genes were similar to all the other genes
 
 ## What the EC50 data looks like for compounds that showed strong effects in all cells?
 
@@ -289,7 +280,59 @@ for ( cmpd1 in rownames(cs2)) {
 }
 ```
 
-## These compounds all target pathways. Target genes are not clear. 
+## Annotate the compound targets
+
+```{r}
+mytable4 = mytable2[mytable2$Compound_effect == "strong effects in all", ]
+mygene1 = sapply(mytable4$Target_gene, function(x) unlist(strsplit(x, split = ", ")))
+mygene2 = unique(unlist(mygene1)) 
+```
+
+## Do CRISPR and compound screening results agree with each other?
+
+```{r}
+y = achille2[mygene2, ]
+
+hc1 = hcluster(y, method = "pearson", link = "average")
+hc2 = hcluster(t(y), method = "pearson", link = "average")
+
+y = y[hc1$order, hc2$order]
+gdt <- melt(as.matrix(y))
+
+gdt$gene <- factor(gdt$Var1, levels = rownames(y))
+gdt$cell <- factor(gdt$Var2, levels = colnames(y))
+
+ggplot(gdt, aes(x = gene, y = cell, fill = value)) + 
+  geom_tile() + guides(alpha = F) + 
+  scale_fill_gradient2(low = "blue", high = "red") +
+  theme_bw() + xlab("") + ylab("") +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1))
+```
+
+## Test: what is the odds ratio of the 9 genes to have dependency probability larger than 0.5
+
+```{r}
+y1 = achille2
+y2 = achille2[mygene2, ]
+
+table(y1 > 0.5) / nrow(y1) / ncol(y1)
+table(y2 > 0.5) / nrow(y2) / ncol(y2)
+
+y1m = melt(as.matrix(y1))
+y2m = melt(as.matrix(y2))
+
+y1m$ID = paste(y1m$Var1, y1m$Var2, sep = "_")
+y2m$ID = paste(y2m$Var1, y2m$Var2, sep = "_")
+
+y3 = data.frame(ID = y1m$ID, pp = y1m$value)
+y3$bpp = as.numeric(y3$pp > 0.5)
+y3$cs = as.numeric(y3$ID %in% y2m$ID)
+
+glm(data = y3, bpp ~ cs, family = "binomial") %>% summary
+y4 = with(y3, table(bpp, cs))
+chisq.test(y4)$p.value
+```
+
 
 ## What the EC50 data looks like for compounds that showed variable effects across the cells?
 
